@@ -1,0 +1,13 @@
+DATABASE_URL=postgresql+psycopg://myveltrak_user:OydgqBkEwYl1k9zVhJCalRC3BVs7I3MN@dpg-d7nnlhjeo5us73fehdlg-a.oregon-postgres.render.com:5432/myveltrak
+ADMIN_EMAIL=admin@myveltrak.com
+ADMIN_PASSWORD=Z2nFJLHttqNdP14q
+ADMIN_TOKEN_SECRET=5bf4604e4bb1a7f923b17eb8ab64144046681a13d019a6680b8d47c285c472fe
+ADMIN_TOKEN_EXPIRY_MINUTES=1440
+MSG91_ENABLED=false
+MSG91_AUTH_KEY=500086Axgw0hbj69e8a5a9P1
+MSG91_TEMPLATE_ID=69e8aba4d84926d7a90f8f73
+MSG91_SENDER=VELTRA
+MSG91_ROUTE=4
+RAZORPAY_KEY_ID=rzp_test_ShgvbIGrgVvFOS
+RAZORPAY_KEY_SECRET=CgJlsNyqJ8vlz1L3xlPn343j
+PGPASSWORD=OydgqBkEwYl1k9zVhJCalRC3BVs7I3MN psql -h dpg-d7nnlhjeo5us73fehdlg-a.oregon-postgres.render.com -U myveltrak_user -d myveltrak

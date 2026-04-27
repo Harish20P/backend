@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import datetime
 from typing import Any
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.logging_utils import log_operation, mask_email, mask_phone
 from app.db.session import get_db
 from app.models import PlanClaim, User
 from app.schemas import (
@@ -24,6 +26,7 @@ from app.schemas import (
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def normalize_phone(phone_number: str) -> str:
@@ -124,16 +127,20 @@ def require_admin(authorization: str | None = Header(default=None, alias="Author
 
 @router.post("/login", response_model=AdminLoginResponse)
 def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
+    log_operation(logger, "admin_login_requested", email=mask_email(payload.email))
     if payload.email.lower() != settings.admin_email.lower() or payload.password != settings.admin_password:
+        log_operation(logger, "admin_login_failed", email=mask_email(payload.email), reason="invalid_credentials")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
 
     token = create_admin_token(settings.admin_email)
+    log_operation(logger, "admin_login_completed", email=mask_email(settings.admin_email))
     return AdminLoginResponse(access_token=token)
 
 
 @router.get("/users", response_model=AdminUsersResponse)
 def list_users(_: dict[str, Any] = Depends(require_admin), db: Session = Depends(get_db)) -> AdminUsersResponse:
     users = db.query(User).order_by(User.created_at.desc()).all()
+    log_operation(logger, "admin_list_users_completed", user_count=len(users))
     return AdminUsersResponse(users=[user_to_out(user) for user in users])
 
 
@@ -145,6 +152,7 @@ def get_user_claims(
 ) -> AdminUserClaimsResponse:
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        log_operation(logger, "admin_get_user_claims_failed", user_id=user_id, reason="user_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     claims = (
@@ -153,6 +161,7 @@ def get_user_claims(
         .order_by(PlanClaim.created_at.desc())
         .all()
     )
+    log_operation(logger, "admin_get_user_claims_completed", user_id=user_id, claim_count=len(claims))
     return AdminUserClaimsResponse(user=user_to_out(user), claims=[claim_to_out(claim) for claim in claims])
 
 
@@ -165,6 +174,7 @@ def activate_user_claim(
 ) -> PlanClaimOut:
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        log_operation(logger, "admin_activate_claim_failed", user_id=user_id, claim_id=claim_id, reason="user_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     claim = (
@@ -173,18 +183,22 @@ def activate_user_claim(
         .first()
     )
     if not claim:
+        log_operation(logger, "admin_activate_claim_failed", user_id=user_id, claim_id=claim_id, reason="claim_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
 
     if claim.payment_status != "paid" and claim.payment_status != "activated":
+        log_operation(logger, "admin_activate_claim_failed", user_id=user_id, claim_id=claim_id, reason="invalid_payment_status")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only paid claims can be activated")
 
     if claim.payment_status == "activated":
+        log_operation(logger, "admin_activate_claim_skipped", user_id=user_id, claim_id=claim_id, reason="already_activated")
         return claim_to_out(claim)
 
     claim.payment_status = "activated"
     claim.activated_at = datetime.utcnow()
     db.commit()
     db.refresh(claim)
+    log_operation(logger, "admin_activate_claim_completed", user_id=user_id, claim_id=claim_id)
     return claim_to_out(claim)
 
 
@@ -195,9 +209,11 @@ def create_user(
     db: Session = Depends(get_db),
 ) -> UserOut:
     phone = normalize_phone(payload.phone_number)
+    log_operation(logger, "admin_create_user_requested", phone=mask_phone(phone))
 
     existing_user = db.query(User).filter(User.phone_number == phone).first()
     if existing_user:
+        log_operation(logger, "admin_create_user_failed", phone=mask_phone(phone), reason="user_exists")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
 
     user = User(
@@ -209,4 +225,5 @@ def create_user(
     db.add(user)
     db.commit()
     db.refresh(user)
+    log_operation(logger, "admin_create_user_completed", user_id=user.id, phone=mask_phone(user.phone_number))
     return user_to_out(user)

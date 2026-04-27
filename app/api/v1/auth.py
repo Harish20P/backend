@@ -8,6 +8,7 @@ from sqlalchemy import and_, desc
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.logging_utils import log_operation, mask_otp, mask_phone
 from app.db.session import get_db
 from app.models import OtpCode, User, UserSession
 from app.schemas import (
@@ -123,33 +124,34 @@ def get_session_from_token(db: Session, authorization: str | None) -> UserSessio
 
 @router.post("/signup/send-otp", response_model=MessageResponse)
 def signup_send_otp(payload: SignupSendOtpRequest, db: Session = Depends(get_db)) -> MessageResponse:
-    try:
-        phone = normalize_phone(payload.phone_number)
-        logger.info(f"Signup OTP request for phone: {phone}")
+    phone = normalize_phone(payload.phone_number)
+    log_operation(logger, "signup_send_otp_requested", phone=mask_phone(phone))
 
-        existing_user = db.query(User).filter(User.phone_number == phone).first()
-        if existing_user:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists. Please login.")
+    existing_user = db.query(User).filter(User.phone_number == phone).first()
+    if existing_user:
+        log_operation(logger, "signup_send_otp_blocked", phone=mask_phone(phone), reason="user_exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists. Please login.")
 
-        otp_code = create_otp(db=db, phone_number=phone, purpose="signup")
-        logger.info(f"Generated OTP for signup {phone}: {otp_code}")
-        msg91_service.send_otp(phone_number=phone, otp_code=otp_code)
-        return MessageResponse(message="OTP sent successfully")
-    except Exception as e:
-        logger.error(f"Error in signup_send_otp: {str(e)}", exc_info=True)
-        raise
+    otp_code = create_otp(db=db, phone_number=phone, purpose="signup")
+    log_operation(logger, "signup_otp_generated", phone=mask_phone(phone), otp=mask_otp(otp_code))
+    msg91_service.send_otp(phone_number=phone, otp_code=otp_code)
+    log_operation(logger, "signup_send_otp_completed", phone=mask_phone(phone))
+    return MessageResponse(message="OTP sent successfully")
 
 
 @router.post("/signup/verify-otp", response_model=AuthResponse)
 def signup_verify_otp(payload: SignupVerifyOtpRequest, db: Session = Depends(get_db)) -> AuthResponse:
     phone = normalize_phone(payload.phone_number)
+    log_operation(logger, "signup_verify_otp_requested", phone=mask_phone(phone), otp=mask_otp(payload.otp))
     otp_record = get_valid_otp(db=db, phone_number=phone, purpose="signup", otp=payload.otp)
 
     if not otp_record:
+        log_operation(logger, "signup_verify_otp_failed", phone=mask_phone(phone), reason="invalid_or_expired_otp")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
 
     existing_user = db.query(User).filter(User.phone_number == phone).first()
     if existing_user:
+        log_operation(logger, "signup_verify_otp_blocked", phone=mask_phone(phone), reason="user_exists")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists. Please login.")
 
     otp_record.is_consumed = True
@@ -165,45 +167,48 @@ def signup_verify_otp(payload: SignupVerifyOtpRequest, db: Session = Depends(get
     db.refresh(user)
 
     access_token = create_session(db=db, user_id=user.id)
+    log_operation(logger, "signup_verify_otp_completed", phone=mask_phone(phone), user_id=user.id)
 
     return AuthResponse(access_token=access_token, user=user_to_out(user))
 
 
 @router.post("/login/send-otp", response_model=MessageResponse)
 def login_send_otp(payload: SendOtpRequest, db: Session = Depends(get_db)) -> MessageResponse:
-    try:
-        phone = normalize_phone(payload.phone_number)
-        logger.info(f"Login OTP request for phone: {phone}")
+    phone = normalize_phone(payload.phone_number)
+    log_operation(logger, "login_send_otp_requested", phone=mask_phone(phone))
 
-        existing_user = db.query(User).filter(User.phone_number == phone).first()
-        if not existing_user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found. Please signup first.")
+    existing_user = db.query(User).filter(User.phone_number == phone).first()
+    if not existing_user:
+        log_operation(logger, "login_send_otp_blocked", phone=mask_phone(phone), reason="user_not_found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found. Please signup first.")
 
-        otp_code = create_otp(db=db, phone_number=phone, purpose="login")
-        logger.info(f"Generated OTP for login {phone}: {otp_code}")
-        msg91_service.send_otp(phone_number=phone, otp_code=otp_code)
-        return MessageResponse(message="OTP sent successfully")
-    except Exception as e:
-        logger.error(f"Error in login_send_otp: {str(e)}", exc_info=True)
-        raise
+    otp_code = create_otp(db=db, phone_number=phone, purpose="login")
+    log_operation(logger, "login_otp_generated", phone=mask_phone(phone), otp=mask_otp(otp_code))
+    msg91_service.send_otp(phone_number=phone, otp_code=otp_code)
+    log_operation(logger, "login_send_otp_completed", phone=mask_phone(phone))
+    return MessageResponse(message="OTP sent successfully")
 
 
 @router.post("/login/verify-otp", response_model=AuthResponse)
 def login_verify_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)) -> AuthResponse:
     phone = normalize_phone(payload.phone_number)
+    log_operation(logger, "login_verify_otp_requested", phone=mask_phone(phone), otp=mask_otp(payload.otp))
     otp_record = get_valid_otp(db=db, phone_number=phone, purpose="login", otp=payload.otp)
 
     if not otp_record:
+        log_operation(logger, "login_verify_otp_failed", phone=mask_phone(phone), reason="invalid_or_expired_otp")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
 
     user = db.query(User).filter(User.phone_number == phone).first()
     if not user:
+        log_operation(logger, "login_verify_otp_blocked", phone=mask_phone(phone), reason="user_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found. Please signup first.")
 
     otp_record.is_consumed = True
     db.commit()
 
     access_token = create_session(db=db, user_id=user.id)
+    log_operation(logger, "login_verify_otp_completed", phone=mask_phone(phone), user_id=user.id)
     return AuthResponse(access_token=access_token, user=user_to_out(user))
 
 
@@ -216,8 +221,10 @@ def session_me(
     user = db.query(User).filter(User.id == session.user_id).first()
 
     if not user:
+        log_operation(logger, "session_me_failed", user_id=session.user_id, reason="user_not_found")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found for session")
 
+    log_operation(logger, "session_me_completed", user_id=user.id, phone=mask_phone(user.phone_number))
     return user_to_out(user)
 
 
@@ -229,4 +236,5 @@ def logout(
     session = get_session_from_token(db=db, authorization=authorization)
     session.revoked_at = datetime.utcnow()
     db.commit()
+    log_operation(logger, "logout_completed", user_id=session.user_id)
     return MessageResponse(message="Logged out successfully")

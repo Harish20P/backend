@@ -2,6 +2,7 @@ import hashlib
 import hmac
 from datetime import datetime, timedelta
 from typing import Any
+import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 import razorpay
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.auth import get_session_from_token
 from app.core.config import get_settings
+from app.core.logging_utils import log_operation
 from app.db.session import get_db
 from app.models import PlanClaim
 from app.schemas import (
@@ -23,6 +25,7 @@ from app.schemas import (
 
 router = APIRouter(prefix="/plans", tags=["Plans"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def claim_to_out(claim: PlanClaim) -> PlanClaimOut:
@@ -68,6 +71,7 @@ def expire_old_activated_plan_claims(db: Session) -> None:
         claim.payment_status = "expired"
         claim.expired_at = claim.activated_at + timedelta(days=30) if claim.activated_at else datetime.utcnow()
     db.commit()
+    log_operation(logger, "expired_old_plan_claims", count=len(expired_claims))
 
 
 @router.get("/claims", response_model=PlanClaimsResponse)
@@ -83,6 +87,7 @@ def list_my_plan_claims(
         .order_by(PlanClaim.created_at.desc())
         .all()
     )
+    log_operation(logger, "list_my_plan_claims_completed", user_id=session.user_id, claim_count=len(claims))
     return PlanClaimsResponse(claims=[claim_to_out(claim) for claim in claims])
 
 
@@ -92,9 +97,17 @@ def create_order(
     authorization: str | None = Header(default=None, alias="Authorization"),
     db: Session = Depends(get_db),
 ) -> CreateOrderResponse:
-    get_session_from_token(db=db, authorization=authorization)
+    session = get_session_from_token(db=db, authorization=authorization)
+    log_operation(
+        logger,
+        "create_order_requested",
+        user_id=session.user_id,
+        amount=payload.amount,
+        currency=payload.currency.upper(),
+    )
 
     if payload.amount < 100:
+        log_operation(logger, "create_order_blocked", user_id=session.user_id, reason="amount_too_low")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount must be at least 100 paise")
 
     client, key_id = get_razorpay_client()
@@ -111,9 +124,12 @@ def create_order(
         status_code = getattr(exc, "status_code", None)
         error_message = str(exc)
         if status_code == 401 or "401" in error_message:
+            log_operation(logger, "create_order_failed", user_id=session.user_id, reason="razorpay_auth_failed")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Razorpay authentication failed") from exc
+        log_operation(logger, "create_order_failed", user_id=session.user_id, reason="razorpay_error")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create Razorpay order") from exc
 
+    log_operation(logger, "create_order_completed", user_id=session.user_id, order_id=order["id"])
     return CreateOrderResponse(
         order_id=order["id"],
         amount=order["amount"],
@@ -129,11 +145,14 @@ def verify_payment(
     db: Session = Depends(get_db),
 ) -> VerifyPaymentResponse:
     session = get_session_from_token(db=db, authorization=authorization)
+    log_operation(logger, "verify_payment_requested", user_id=session.user_id, order_id=payload.razorpay_order_id)
 
     if not payload.razorpay_order_id or not payload.razorpay_payment_id or not payload.razorpay_signature:
+        log_operation(logger, "verify_payment_blocked", user_id=session.user_id, reason="missing_fields")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing required payment fields")
 
     if not settings.razorpay_key_secret:
+        log_operation(logger, "verify_payment_failed", user_id=session.user_id, reason="razorpay_not_configured")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Razorpay is not configured")
 
     signed_payload = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
@@ -144,6 +163,7 @@ def verify_payment(
     ).hexdigest()
 
     if not hmac.compare_digest(generated_signature, payload.razorpay_signature):
+        log_operation(logger, "verify_payment_failed", user_id=session.user_id, reason="signature_mismatch", order_id=payload.razorpay_order_id)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Signature mismatch")
 
     claim = PlanClaim(
@@ -164,6 +184,7 @@ def verify_payment(
     db.commit()
     db.refresh(claim)
 
+    log_operation(logger, "verify_payment_completed", user_id=session.user_id, claim_id=claim.id, payment_status=claim.payment_status)
     return VerifyPaymentResponse(success=True, claim=claim_to_out(claim))
 
 
@@ -174,6 +195,7 @@ def submit_plan_claim(
     db: Session = Depends(get_db),
 ) -> PlanClaimOut:
     session = get_session_from_token(db=db, authorization=authorization)
+    log_operation(logger, "submit_plan_claim_requested", user_id=session.user_id, plan_name=payload.plan_name)
 
     claim = PlanClaim(
         user_id=session.user_id,
@@ -189,4 +211,5 @@ def submit_plan_claim(
     db.commit()
     db.refresh(claim)
 
+    log_operation(logger, "submit_plan_claim_completed", user_id=session.user_id, claim_id=claim.id)
     return claim_to_out(claim)

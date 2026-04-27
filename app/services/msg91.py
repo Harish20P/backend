@@ -3,6 +3,7 @@ import logging
 import httpx
 
 from app.core.config import get_settings
+from app.core.logging_utils import log_operation, mask_otp, mask_phone
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class Msg91Service:
     def send_otp(self, phone_number: str, otp_code: str) -> None:
         # Fallback for local development when MSG91 is not configured.
         if not self.settings.msg91_enabled:
-            logger.info("DEV OTP for %s is %s", phone_number, otp_code)
+            log_operation(logger, "msg91_dev_otp_logged", phone=mask_phone(phone_number), otp=mask_otp(otp_code))
             return
 
         if not self.settings.msg91_auth_key:
@@ -53,17 +54,18 @@ class Msg91Service:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            logger.error(
-                "MSG91 template send failed for %s: status=%s body=%s",
-                phone_number,
+            logger.exception(
+                "msg91_send_failed | phone=%s status=%s body=%s",
+                mask_phone(phone_number),
                 response.status_code,
                 response.text,
-                exc_info=True,
             )
             raise RuntimeError(f"MSG91 template send failed: {response.text}") from exc
 
-        logger.info(
-            "MSG91 template OTP sent for %s using template %s",
-            phone_number,
-            self.settings.msg91_template_id,
+        log_operation(
+            logger,
+            "msg91_send_completed",
+            phone=mask_phone(phone_number),
+            otp=mask_otp(otp_code),
+            template_id=self.settings.msg91_template_id,
         )
