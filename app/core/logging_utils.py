@@ -92,15 +92,12 @@ def mask_email(email: str | None) -> str:
 
 
 def mask_otp(otp: str | None) -> str:
-	"""Mask an OTP while still allowing event correlation in logs."""
+	"""Return an OTP value for logging."""
 
 	if not otp:
 		return "unknown"
 
-	if len(otp) <= 2:
-		return "*" * len(otp)
-
-	return f"{'*' * (len(otp) - 2)}{otp[-2:]}"
+	return otp
 
 
 def log_operation(logger: logging.Logger, message: str, **fields: Any) -> None:
