@@ -1,0 +1,31 @@
+MyVeltrak Backend Setup
+
+1. Open a terminal in the `myveltrak - backend` folder.
+
+2. Create the virtual environment:
+   uv venv
+
+3. Activate the virtual environment:
+   PowerShell:
+   .\.venv\Scripts\Activate.ps1
+
+   Command Prompt:
+   .\.venv\Scripts\activate.bat
+
+4. Install dependencies:
+   uv sync
+
+   If you want to install them with pip instead:
+   python -m pip install --upgrade pip
+   pip install fastapi "uvicorn[standard]" sqlalchemy "psycopg[binary]" alembic pydantic-settings
+   pip install pytest httpx ruff
+
+5. Run the backend:
+   uvicorn app.main:app --reload
+
+6. Optional database services:
+   docker compose up -d
+
+Notes:
+- The current backend scaffold does not yet define a FastAPI `app` object in `app/main.py`.
+- The run command above will work after the app entrypoint is added.
