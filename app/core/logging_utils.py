@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging.config
 import logging
 import uuid
 from typing import Any
@@ -10,9 +11,44 @@ from typing import Any
 def configure_logging() -> None:
 	"""Configure a consistent log format for the application."""
 
-	logging.basicConfig(
-		level=logging.INFO,
-		format="%(asctime)s %(levelname)s %(name)s %(message)s",
+	logging.config.dictConfig(
+		{
+			"version": 1,
+			"disable_existing_loggers": False,
+			"formatters": {
+				"default": {
+					"format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+				}
+			},
+			"handlers": {
+				"stdout": {
+					"class": "logging.StreamHandler",
+					"formatter": "default",
+					"stream": "ext://sys.stdout",
+				},
+			},
+			"root": {
+				"level": "INFO",
+				"handlers": ["stdout"],
+			},
+			"loggers": {
+				"uvicorn": {
+					"level": "INFO",
+					"handlers": ["stdout"],
+					"propagate": False,
+				},
+				"uvicorn.error": {
+					"level": "INFO",
+					"handlers": ["stdout"],
+					"propagate": False,
+				},
+				"uvicorn.access": {
+					"level": "INFO",
+					"handlers": ["stdout"],
+					"propagate": False,
+				},
+			},
+		}
 	)
 
 
